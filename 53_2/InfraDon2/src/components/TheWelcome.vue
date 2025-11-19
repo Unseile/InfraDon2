@@ -33,7 +33,6 @@ const initDatabase = () => {
 }
 
 const indexNumber = () => {
-
   const num = parseInt(searchQuery.value)
   if (isNaN(num)) {
     fetchData()
@@ -51,9 +50,7 @@ const indexNumber = () => {
 }
 
 const fetchData = (): any => {
-  const choiceDb = isOffline.value ? localDB : storage.value
-
-  choiceDb
+  localDB
     .allDocs({
       include_docs: true,
     })
@@ -68,9 +65,8 @@ const fetchData = (): any => {
 
 const createDoc = (): any => {
   counter++
-  const choiceDb = isOffline.value ? localDB : storage.value
 
-  choiceDb
+  localDB
     .post({
       number: counter,
       title: 'Document ' + counter,
@@ -86,9 +82,8 @@ const createDoc = (): any => {
 }
 
 const deleteDoc = (post: any): any => {
-  const choiceDb = isOffline.value ? localDB : storage.value
 
-  choiceDb
+  localDB
     .remove(post)
     .then(function (response: any) {
       fetchData()
@@ -100,10 +95,9 @@ const deleteDoc = (post: any): any => {
 }
 
 const updateDoc = (post: any): any => {
-  const choiceDb = isOffline.value ? localDB : storage.value
 
   post.title = post.title + ' (modifié)'
-  choiceDb
+  localDB
     .put(post)
     .then(function (response: any) {
       fetchData()
@@ -155,27 +149,28 @@ const startSync = () => {
 onMounted(() => {
   console.log('=> Composant initialisé')
   initDatabase()
-  fetchData()
-  console.log(postsData.value)
   localDB = new PouchDB('infradon_local')
+  fetchData()
+  startSync()
+  console.log(postsData.value)
 })
 </script>
 
 <template>
   <button
-  @click="toggleOffline"
-  :style="{
-    marginBottom: '10px',
-    backgroundColor: isOffline ? 'red' : 'green',
-    color: 'white',
-    border: 'none',
-    padding: '8px 16px',
-    cursor: 'pointer',
-    borderRadius: '4px'
-  }"
->
-  {{ isOffline ? 'mode offline' : 'mode online' }}
-</button>
+    @click="toggleOffline"
+    :style="{
+      marginBottom: '10px',
+      backgroundColor: isOffline ? 'red' : 'green',
+      color: 'white',
+      border: 'none',
+      padding: '8px 16px',
+      cursor: 'pointer',
+      borderRadius: '4px',
+    }"
+  >
+    {{ isOffline ? 'mode offline' : 'mode online' }}
+  </button>
   <h1>Fetch Data</h1>
   <input v-model="searchQuery" @input="indexNumber" placeholder="Rechercher par numéro..." />
   <button @click="createDoc" style="margin: 10px">Ajouter un document</button>
