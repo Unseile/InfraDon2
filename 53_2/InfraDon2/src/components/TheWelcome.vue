@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import PouchDB from 'pouchdb'
 
 declare interface Post {
+  number: number
   title: string
   content: string
   name: string
@@ -14,6 +15,11 @@ declare interface Post {
 const storage = ref()
 const postsData = ref<Post[]>([])
 let counter = 0
+const searchQuery = ref<string>('')
+
+const isOffline = ref(false)
+let localDB: any = null
+let liveSync: any = null
 
 const initDatabase = () => {
   console.log('=> Connexion à la base de données')
@@ -26,8 +32,28 @@ const initDatabase = () => {
   }
 }
 
-const fetchData = (): any => {
+const indexNumber = () => {
+
+  const num = parseInt(searchQuery.value)
+  if (isNaN(num)) {
+    fetchData()
+    return
+  }
+
   storage.value
+    .allDocs({ include_docs: true })
+    .then((result: any) => {
+      postsData.value = result.rows.map((r: any) => r.doc).filter((doc: any) => doc.number === num)
+    })
+    .catch((err: any) => {
+      console.error('Erreur recherche :', err)
+    })
+}
+
+const fetchData = (): any => {
+  const choiceDb = isOffline.value ? localDB : storage.value
+
+  choiceDb
     .allDocs({
       include_docs: true,
     })
@@ -42,8 +68,11 @@ const fetchData = (): any => {
 
 const createDoc = (): any => {
   counter++
-  storage.value
+  const choiceDb = isOffline.value ? localDB : storage.value
+
+  choiceDb
     .post({
+      number: counter,
       title: 'Document ' + counter,
       content: 'Contenu du document ',
     })
@@ -57,7 +86,9 @@ const createDoc = (): any => {
 }
 
 const deleteDoc = (post: any): any => {
-  storage.value
+  const choiceDb = isOffline.value ? localDB : storage.value
+
+  choiceDb
     .remove(post)
     .then(function (response: any) {
       fetchData()
@@ -69,8 +100,10 @@ const deleteDoc = (post: any): any => {
 }
 
 const updateDoc = (post: any): any => {
+  const choiceDb = isOffline.value ? localDB : storage.value
+
   post.title = post.title + ' (modifié)'
-  storage.value
+  choiceDb
     .put(post)
     .then(function (response: any) {
       fetchData()
@@ -81,25 +114,42 @@ const updateDoc = (post: any): any => {
     })
 }
 
-const replicateDatabase = () => {
-  if (!storage.value) return
+const toggleOffline = () => {
+  isOffline.value = !isOffline.value
 
-  const localDB = new PouchDB('infradon_local') // base locale
-  const remoteDB = storage.value // base distante
+  if (isOffline.value) {
+    console.log('mode offline: activé')
+    stopSync()
+  } else {
+    console.log('mode online: activé')
+    startSync()
+  }
+}
 
-  PouchDB.replicate(remoteDB, localDB)
-    .on('complete', (info) => {
-      console.log('Réplique terminée :', info)
+const stopSync = () => {
+  if (liveSync) {
+    liveSync.cancel()
+    liveSync = null
+    console.log('Synchronisation live arrêtée')
+  }
+}
+
+const startSync = () => {
+  if (!localDB || !storage.value) return
+
+  liveSync = PouchDB.sync(localDB, storage.value, {
+    live: true,
+    retry: true,
+  })
+    .on('change', (info) => {
+      console.log('Changement synchronisé :', info)
       fetchData()
     })
     .on('error', (err) => {
-      console.error('Erreur lors de la réplication :', err)
+      console.error('Erreur sync :', err)
     })
 
-  localDB
-    .allDocs({ include_docs: true })
-    .then((result) => console.log('Docs locaux :', result.rows))
-    .catch((err) => console.error(err))
+  console.log('Synchronisation live relancée')
 }
 
 onMounted(() => {
@@ -107,17 +157,32 @@ onMounted(() => {
   initDatabase()
   fetchData()
   console.log(postsData.value)
-  replicateDatabase()
+  localDB = new PouchDB('infradon_local')
 })
 </script>
 
 <template>
+  <button
+  @click="toggleOffline"
+  :style="{
+    marginBottom: '10px',
+    backgroundColor: isOffline ? 'red' : 'green',
+    color: 'white',
+    border: 'none',
+    padding: '8px 16px',
+    cursor: 'pointer',
+    borderRadius: '4px'
+  }"
+>
+  {{ isOffline ? 'mode offline' : 'mode online' }}
+</button>
   <h1>Fetch Data</h1>
+  <input v-model="searchQuery" @input="indexNumber" placeholder="Rechercher par numéro..." />
+  <button @click="createDoc" style="margin: 10px">Ajouter un document</button>
   <article v-for="post in postsData" v-bind:key="(post as any).id">
     <h2>{{ post.title }}</h2>
     <p>{{ post.content }}</p>
     <button @click="deleteDoc(post)">Supprimer le document</button><br />
     <button @click="updateDoc(post)">Modifier le document</button>
   </article>
-  <button @click="createDoc">Ajouter un document</button>
 </template>
