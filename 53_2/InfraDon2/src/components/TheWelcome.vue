@@ -2,6 +2,9 @@
 import { onMounted, ref } from 'vue'
 import PouchDB from 'pouchdb'
 
+import FindPlugin from 'pouchdb-find'
+PouchDB.plugin(FindPlugin);
+
 declare interface Post {
   number: number
   title: string
@@ -12,24 +15,36 @@ declare interface Post {
   }
 }
 
+onMounted(() => {
+  console.log('=> Composant initialisé')
+  initDatabase()
+  fetchData()
+  console.log(postsData.value)
+})
+
 const storage = ref()
 const postsData = ref<Post[]>([])
 let counter = 0
 const searchQuery = ref<string>('')
 
 const isOffline = ref(false)
-let localDB: any = null
 let liveSync: any = null
 
 const initDatabase = () => {
   console.log('=> Connexion à la base de données')
-  const db = new PouchDB('http://leahaberli:20203Marie223@localhost:5984/infradon_projetlibre')
-  if (db) {
-    console.log('Connected to collection : ' + db?.name)
-    storage.value = db
+  const localDB = new PouchDB('infradon_local')
+  if (localDB) {
+    console.log('Connected to collection : ' + localDB?.name)
+    storage.value = localDB
   } else {
     console.warn('Something went wrong')
   }
+
+  storage.value
+  .then(function (response: any) {
+      startSync()
+      console.log(response)
+    })
 }
 
 const indexNumber = () => {
@@ -50,7 +65,7 @@ const indexNumber = () => {
 }
 
 const fetchData = (): any => {
-  localDB
+  storage.value
     .allDocs({
       include_docs: true,
     })
@@ -66,7 +81,7 @@ const fetchData = (): any => {
 const createDoc = (): any => {
   counter++
 
-  localDB
+  storage.value
     .post({
       number: counter,
       title: 'Document ' + counter,
@@ -83,7 +98,7 @@ const createDoc = (): any => {
 
 const deleteDoc = (post: any): any => {
 
-  localDB
+  storage.value
     .remove(post)
     .then(function (response: any) {
       fetchData()
@@ -97,7 +112,7 @@ const deleteDoc = (post: any): any => {
 const updateDoc = (post: any): any => {
 
   post.title = post.title + ' (modifié)'
-  localDB
+  storage.value
     .put(post)
     .then(function (response: any) {
       fetchData()
@@ -129,9 +144,8 @@ const stopSync = () => {
 }
 
 const startSync = () => {
-  if (!localDB || !storage.value) return
-
-  liveSync = PouchDB.sync(localDB, storage.value, {
+  
+  liveSync = PouchDB.sync(storage.value, 'http://leahaberli:20203Marie223@localhost:5984/infradon_projetlibre', {
     live: true,
     retry: true,
   })
@@ -146,14 +160,6 @@ const startSync = () => {
   console.log('Synchronisation live relancée')
 }
 
-onMounted(() => {
-  console.log('=> Composant initialisé')
-  initDatabase()
-  localDB = new PouchDB('infradon_local')
-  fetchData()
-  startSync()
-  console.log(postsData.value)
-})
 </script>
 
 <template>
