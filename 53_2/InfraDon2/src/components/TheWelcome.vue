@@ -28,8 +28,10 @@ interface Message {
   newCommentText?: string
 }
 
-const messagesDB = ref<any>(null) 
-const commentsDB = ref<any>(null) 
+let blockAutoRefresh = false
+
+const messagesDB = ref<any>(null)
+const commentsDB = ref<any>(null)
 const postsData = ref<Message[]>([])
 const displayedMessages = ref<Message[]>([])
 const isOffline = ref(false)
@@ -39,6 +41,7 @@ const newMessageContent = ref('')
 const searchQuery = ref('')
 const sortByLikes = ref(false)
 const showTop10 = ref(false)
+const globalShowAllComments = ref(false)
 
 onMounted(() => {
   console.log('=> Composant initialisé')
@@ -66,59 +69,41 @@ const createIndexes = () => {
     .catch((err: any) => console.warn('createIndexes warning:', err))
 }
 
-
 const fetchMessages = () => {
-  if (!messagesDB.value) return Promise.resolve()
-
-  const finalizeDisplayed = (msgs: Message[]) => {
-    postsData.value = msgs
-    postsData.value.forEach((m) => {
-      if (m.showAllComments === undefined) m.showAllComments = false
-      if (!m.comments) m.comments = []
-    })
-    displayedMessages.value = postsData.value
-    return Promise.all(
-      displayedMessages.value.map((m: any) => {
-        return commentsDB.value
-          .find({
-            selector: { type: 'comment', messageId: m._id },
-            limit: 1,
-          })
-          .then((cres: any) => {
-            m.comments = cres.docs?.length ? (cres.docs as Comment[]) : []
-          })
-          .catch(() => {
-            m.comments = []
-          })
-      }),
-    )
-  }
-
-  const query: any = { selector: { type: 'message' } }
-
-  if (searchQuery.value && searchQuery.value.trim()) {
-    query.selector.content = { $regex: searchQuery.value }
-  }
-
-  if (sortByLikes.value) {
-    query.sort = [{ type: 'asc' }, { likes: 'desc' }]
-  }
-
-  if (showTop10.value) {
-    query.limit = 10
-  }
+  if (blockAutoRefresh) return
 
   return messagesDB.value
-    .find(query)
-    .then((res: any) => {
-      res.docs.forEach((m: Message) => {
-        if (m.likes === undefined) m.likes = 0
+    .allDocs({ include_docs: true })
+    .then(async (result: any) => {
+      let list = result.rows
+        .map((r: any) => r.doc)
+        .filter((doc: any) => doc && doc.type === 'message')
+
+      if (sortByLikes.value || showTop10.value) {
+        list = list.sort((a: any, b: any) => (b.likes || 0) - (a.likes || 0))
+      }
+
+      list.forEach((msg: Message) => {
+        const prev = postsData.value.find((m: Message) => m._id === msg._id)
+
+        msg.showAllComments = prev ? prev.showAllComments : false
+        msg.comments = prev ? prev.comments || [] : []
+        msg.newCommentText = prev ? prev.newCommentText : ''
       })
-      return finalizeDisplayed(res.docs)
+
+      postsData.value = list
+      displayedMessages.value = showTop10.value ? list.slice(0, 10) : list
+
+      for (const msg of displayedMessages.value) {
+        if (msg.showAllComments || globalShowAllComments.value) {
+          await loadCommentsForMessage(msg)
+        } else {
+          await loadFirstCommentForMessage(msg)
+        }
+      }
     })
     .catch((err: any) => console.error('Erreur fetchMessages:', err))
 }
-
 
 const createMessage = () => {
   const id = 'msg_' + Date.now() + '_' + Math.floor(Math.random() * 1000)
@@ -333,6 +318,7 @@ const randomNames = [
   'Benoît',
   'Inoé',
   'Marike',
+  'Etienne',
 ]
 const randomQuotes = [
   'La vie est un écho : ce que tu envoies revient toujours.',
@@ -392,6 +378,22 @@ const generateFakeMessages = (count: number) => {
       return fetchMessages()
     })
     .catch((err: any) => console.error('Erreur generateFakeMessages:', err))
+}
+
+const toggleComments = async (msg: Message) => {
+  blockAutoRefresh = true
+
+  msg.showAllComments = !msg.showAllComments
+
+  if (msg.showAllComments) {
+    await loadCommentsForMessage(msg)
+  } else {
+    await loadFirstCommentForMessage(msg)
+  }
+
+  setTimeout(() => {
+    blockAutoRefresh = false
+  }, 300)
 }
 </script>
 
@@ -563,22 +565,12 @@ const generateFakeMessages = (count: number) => {
     </div>
 
     <button
-      v-if="msg.comments && msg.comments.length ? msg.comments.length > 1 : false"
-      @click="
-        msg.showAllComments = !msg.showAllComments;
-        if (msg.showAllComments) loadCommentsForMessage(msg)
-      "
-      style="
-        margin-top: 5px;
-        margin-right: 5px;
-        color: black;
-        padding: 5px;
-        border-radius: 8px;
-        border: 0px;
-      "
+      v-if="msg.comments && (msg.comments.length > 0 || msg.showAllComments)"
+      @click="toggleComments(msg)"
     >
       {{ msg.showAllComments ? 'Réduire' : 'Voir tous les commentaires' }}
     </button>
+
     <div>
       <input
         v-model="msg.newCommentText"
