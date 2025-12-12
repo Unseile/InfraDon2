@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
 import PouchDB from 'pouchdb'
-
+import { onMounted, ref } from 'vue'
 import FindPlugin from 'pouchdb-find'
 PouchDB.plugin(FindPlugin)
 
