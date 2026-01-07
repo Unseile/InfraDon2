@@ -25,6 +25,10 @@ interface Message {
   comments?: Comment[]
   showAllComments?: boolean
   newCommentText?: string
+  _attachments?: Record<
+    string,
+    { content_type: string; digest?: string; length?: number; revpos?: number }
+  >
 }
 
 let blockAutoRefresh = false
@@ -41,6 +45,7 @@ const searchQuery = ref('')
 const sortByLikes = ref(false)
 const showTop10 = ref(false)
 const globalShowAllComments = ref(false)
+const attachmentUrls = ref<Record<string, Record<string, string>>>({})
 
 onMounted(() => {
   console.log('=> Composant initialisé')
@@ -68,40 +73,41 @@ const createIndexes = () => {
     .catch((err: any) => console.warn('createIndexes warning:', err))
 }
 
-const fetchMessages = () => {
+const fetchMessages = async () => {
   if (blockAutoRefresh) return
 
-  return messagesDB.value
-    .allDocs({ include_docs: true })
-    .then(async (result: any) => {
-      let list = result.rows
-        .map((r: any) => r.doc)
-        .filter((doc: any) => doc && doc.type === 'message')
+  try {
+    const result = await messagesDB.value.allDocs({ include_docs: true })
+    let list = result.rows
+      .map((r: any) => r.doc)
+      .filter((doc: any) => doc && doc.type === 'message')
 
-      if (sortByLikes.value || showTop10.value) {
-        list = list.sort((a: any, b: any) => (b.likes || 0) - (a.likes || 0))
+    if (sortByLikes.value || showTop10.value) {
+      list = list.sort((a: any, b: any) => (b.likes || 0) - (a.likes || 0))
+    }
+
+    for (const msg of list) {
+      const prev = postsData.value.find((m: Message) => m._id === msg._id)
+      msg.showAllComments = prev ? prev.showAllComments : false
+      msg.comments = prev ? prev.comments || [] : []
+      msg.newCommentText = prev ? prev.newCommentText : ''
+
+      await loadAttachmentUrls(msg)
+    }
+
+    postsData.value = list
+    displayedMessages.value = showTop10.value ? list.slice(0, 10) : list
+
+    for (const msg of displayedMessages.value) {
+      if (msg.showAllComments || globalShowAllComments.value) {
+        await loadCommentsForMessage(msg)
+      } else {
+        await loadFirstCommentForMessage(msg)
       }
-
-      list.forEach((msg: Message) => {
-        const prev = postsData.value.find((m: Message) => m._id === msg._id)
-
-        msg.showAllComments = prev ? prev.showAllComments : false
-        msg.comments = prev ? prev.comments || [] : []
-        msg.newCommentText = prev ? prev.newCommentText : ''
-      })
-
-      postsData.value = list
-      displayedMessages.value = showTop10.value ? list.slice(0, 10) : list
-
-      for (const msg of displayedMessages.value) {
-        if (msg.showAllComments || globalShowAllComments.value) {
-          await loadCommentsForMessage(msg)
-        } else {
-          await loadFirstCommentForMessage(msg)
-        }
-      }
-    })
-    .catch((err: any) => console.error('Erreur fetchMessages:', err))
+    }
+  } catch (err) {
+    console.error('Erreur fetchMessages:', err)
+  }
 }
 
 const createMessage = () => {
@@ -394,6 +400,55 @@ const toggleComments = async (msg: Message) => {
     blockAutoRefresh = false
   }, 300)
 }
+
+const addMediaToMessage = async (msg: Message, file: File) => {
+  if (!msg._id || !messagesDB.value) return
+  try {
+    const doc = await messagesDB.value.get(msg._id)
+    await messagesDB.value.putAttachment(doc._id, file.name, doc._rev, file, file.type)
+
+    const updatedDoc = await messagesDB.value.get(msg._id)
+    msg._attachments = updatedDoc._attachments
+
+    await loadAttachmentUrls(msg)
+  } catch (err) {
+    console.error('Erreur addMediaToMessage:', err)
+  }
+}
+
+const deleteMediaFromMessage = async (msg: Message, attachmentName: string) => {
+  if (!msg._id || !messagesDB.value) return
+  try {
+    const doc = await messagesDB.value.get(msg._id)
+    await messagesDB.value.removeAttachment(doc._id, attachmentName, doc._rev)
+    await fetchMessages()
+    await loadAttachmentUrls(msg)
+  } catch (err) {
+    console.error('Erreur deleteMediaFromMessage:', err)
+  }
+}
+
+const loadAttachmentUrls = async (msg: Message) => {
+  if (!msg._id || !msg._attachments || !messagesDB.value) return
+
+  const urls: Record<string, string> = {}
+
+  for (const fileName of Object.keys(msg._attachments)) {
+    try {
+      const blob = await messagesDB.value.getAttachment(msg._id, fileName)
+      if (blob) urls[fileName] = URL.createObjectURL(blob as Blob)
+    } catch (err) {
+      console.warn(`Impossible de charger l'attachement "${fileName}":`, err)
+    }
+  }
+
+  attachmentUrls.value[msg._id] = urls
+}
+
+const getAttachmentUrl = (msg: Message, fileName: string) => {
+  if (!msg._id) return '' 
+  return attachmentUrls.value[msg._id]?.[fileName] || ''
+}
 </script>
 
 <template>
@@ -525,6 +580,85 @@ const toggleComments = async (msg: Message) => {
     >
       Supprimer
     </button>
+
+    <div
+      v-if="msg._attachments"
+      style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px"
+    >
+      <div
+        v-for="fileName in Object.keys(msg._attachments)"
+        :key="fileName"
+        style="position: relative"
+      >
+        <img
+          v-if="
+            msg._attachments[fileName]?.content_type?.startsWith('image/') &&
+            getAttachmentUrl(msg, fileName)
+          "
+          :src="getAttachmentUrl(msg, fileName)"
+          style="max-width: 150px; max-height: 150px; object-fit: cover; border-radius: 4px"
+        />
+
+        <a
+          v-else-if="getAttachmentUrl(msg, fileName)"
+          :href="getAttachmentUrl(msg, fileName)"
+          target="_blank"
+          style="color: blueviolet; text-decoration: underline"
+        >
+          {{ fileName }}
+        </a>
+
+        <button
+          @click="deleteMediaFromMessage(msg, fileName)"
+          style="
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background-color: red;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+          "
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+
+    <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px">
+      <label
+        style="
+          cursor: pointer;
+          padding: 4px 8px;
+          background-color: blueviolet;
+          color: white;
+          border-radius: 4px;
+          display: inline-block;
+          width: fit-content;
+          margin-bottom: 10px;
+        "
+      >
+        Ajouter un fichier
+        <input
+          type="file"
+          accept="image/*,video/*,application/pdf"
+          @change="
+            (event) => {
+              const input = event.target as HTMLInputElement
+              const file = input.files?.[0]
+              if (file) {
+                addMediaToMessage(msg, file)
+                input.value = ''
+              }
+            }
+          "
+          style="display: none"
+        />
+      </label>
+    </div>
 
     <h3>Commentaires :</h3>
 
