@@ -37,13 +37,15 @@ const messagesDB = ref<any>(null)
 const commentsDB = ref<any>(null)
 const postsData = ref<Message[]>([])
 const displayedMessages = ref<Message[]>([])
+const pageSize = 10
+const currentPage = ref(0)
 const isOffline = ref(false)
 
 const newCommentText = ref('')
 const newMessageContent = ref('')
 const searchQuery = ref('')
 const sortByLikes = ref(false)
-const showTop10 = ref(false)
+const showTopLiked = ref(false)
 const globalShowAllComments = ref(false)
 const attachmentUrls = ref<Record<string, Record<string, string>>>({})
 
@@ -82,8 +84,17 @@ const fetchMessages = async () => {
       .map((r: any) => r.doc)
       .filter((doc: any) => doc && doc.type === 'message')
 
-    if (sortByLikes.value || showTop10.value) {
+    if (sortByLikes.value && !showTopLiked.value) {
       list = list.sort((a: any, b: any) => (b.likes || 0) - (a.likes || 0))
+    }
+
+    if (showTopLiked.value) {
+      list = list.sort((a: any, b: any) => {
+        const likeDiff = (b.likes || 0) - (a.likes || 0)
+        if (likeDiff !== 0) return likeDiff
+
+        return new Date(b.creation_date || 0).getTime() - new Date(a.creation_date || 0).getTime()
+      })
     }
 
     for (const msg of list) {
@@ -96,7 +107,10 @@ const fetchMessages = async () => {
     }
 
     postsData.value = list
-    displayedMessages.value = showTop10.value ? list.slice(0, 10) : list
+
+    const start = currentPage.value * pageSize
+    const end = start + pageSize
+    displayedMessages.value = list.slice(start, end)
 
     for (const msg of displayedMessages.value) {
       if (msg.showAllComments || globalShowAllComments.value) {
@@ -170,6 +184,17 @@ const likeMessage = (msg: Message) => {
     })
     .then(() => fetchMessages())
     .catch((err: any) => console.error('Erreur likeMessage:', err))
+}
+
+const loadNextPage = () => {
+  currentPage.value++
+  fetchMessages()
+}
+
+const toggleTopLiked = () => {
+  showTopLiked.value = !showTopLiked.value
+  currentPage.value = 0
+  fetchMessages()
 }
 
 const addComment = (msg: Message, text: string, author = randomItem(randomNames)) => {
@@ -421,8 +446,8 @@ const deleteMediaFromMessage = async (msg: Message, attachmentName: string) => {
   try {
     const doc = await messagesDB.value.get(msg._id)
     await messagesDB.value.removeAttachment(doc._id, attachmentName, doc._rev)
+
     await fetchMessages()
-    await loadAttachmentUrls(msg)
   } catch (err) {
     console.error('Erreur deleteMediaFromMessage:', err)
   }
@@ -446,7 +471,7 @@ const loadAttachmentUrls = async (msg: Message) => {
 }
 
 const getAttachmentUrl = (msg: Message, fileName: string) => {
-  if (!msg._id) return '' 
+  if (!msg._id) return ''
   return attachmentUrls.value[msg._id]?.[fileName] || ''
 }
 </script>
@@ -518,7 +543,7 @@ const getAttachmentUrl = (msg: Message, fileName: string) => {
   </label>
 
   <button
-    @click="((showTop10 = !showTop10), fetchMessages())"
+    @click="toggleTopLiked"
     style="
       margin-left: 10px;
       background-color: blueviolet;
@@ -528,7 +553,11 @@ const getAttachmentUrl = (msg: Message, fileName: string) => {
       border: 0px;
     "
   >
-    {{ showTop10 ? 'Afficher toutes les citations' : 'Afficher Top 10 des plus likés' }}
+    {{ showTopLiked ? 'Afficher toutes les citations' : 'Afficher les 10 citations les plus likées' }}
+  </button>
+
+  <button v-if="(currentPage + 1) * pageSize < postsData.length" @click="loadNextPage">
+    Afficher les 10 citations suivantes
   </button>
 
   <article
